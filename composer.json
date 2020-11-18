@@ -1,0 +1,39 @@
+{
+    "name": "uccello/uccello-couchbase-sync",
+    "description": "A powerful package able to synchronize automatically data between Uccello and a CouchBase server.",
+    "type": "library",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Jonathan SARDO",
+            "email": "jonathan@uccellolabs.com"
+        }
+    ],
+    "require": {
+        "uccello/uccello": "1.0.*"
+    },
+    "autoload": {
+        "psr-4": {
+            "Uccello\\UccelloCouchbaseSync\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Uccello\\UccelloCouchbaseSync\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Uccello\\UccelloCouchbaseSync\\Providers\\AppServiceProvider"
+            ]
+        }
+    },
+    "config": {
+        "preferred-install": "dist",
+        "sort-packages": true,
+        "optimize-autoloader": true
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}
