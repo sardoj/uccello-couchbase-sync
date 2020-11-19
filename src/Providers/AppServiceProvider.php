@@ -3,6 +3,7 @@
 namespace Uccello\UccelloCouchbaseSync\Providers;
 
 use Illuminate\Support\ServiceProvider;
+use Uccello\UccelloCouchbaseSync\Console\Commands\SyncsFromCouchbase;
 
 /**
  * App Service Provider
@@ -48,5 +49,10 @@ class AppServiceProvider extends ServiceProvider
             __DIR__ . '/../../config/couchbase.php',
             'couchbase'
         );
+
+        // Commands
+        $this->commands([
+            SyncsFromCouchbase::class
+        ]);
     }
 }

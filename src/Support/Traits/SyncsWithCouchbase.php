@@ -20,15 +20,26 @@ trait SyncsWithCouchbase
         static::created(function ($model) {
             $model->saveToCouchbase('set');
         });
+
         static::updated(function ($model) {
             $model->saveToCouchbase('update');
         });
-        static::deleted(function ($model) {
-            $model->saveToCouchbase('delete');
+
+        // If it is a true delete, it is important to use "deleting" instead of "deleted"
+        // else we don't know record data
+        static::deleting(function ($model) {
+            if (method_exists($model, 'isForceDeleting') && !$model->isForceDeleting()) {
+                $model->saveToCouchbase('soft-delete');
+            } else {
+                $model->saveToCouchbase('delete');
+            }
         });
-        static::restored(function ($model) {
-            $model->saveToCouchbase('set');
-        });
+
+        if (method_exists(static::class, 'restored')) {
+            static::restored(function ($model) {
+                $model->saveToCouchbase('set');
+            });
+        }
     }
 
     /**
@@ -119,7 +130,7 @@ trait SyncsWithCouchbase
 
         if ($mode === 'set') {
             $return = $this->couchbaseClient->push($path, $couchbaseSyncData);
-        } elseif ($mode === 'update') {
+        } elseif ($mode === 'update' || $mode === 'soft-delete') {
             $return = $this->couchbaseClient->update($path, $couchbaseSyncData);
         } elseif ($mode === 'delete') {
             $return = $this->couchbaseClient->delete($path, ['rev' => $couchbaseSyncData["_rev"]]);
