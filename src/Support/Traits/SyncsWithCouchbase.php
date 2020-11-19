@@ -86,6 +86,8 @@ trait SyncsWithCouchbase
     {
         if ($fresh = $this->fresh()) {
             // Add module name
+            unset($fresh->{$this->getKeyName()}); // Remove id (could create conflicts with Couchbase Lite)
+            $fresh->ucid = $this->getKey(); // Add id name ucid
             $fresh->ucmodule = $this->module->name ?? '';
 
             // Add Couchbase _id and _rev if exists
