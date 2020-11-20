@@ -45,6 +45,10 @@ class SyncsFromCouchbase extends Command
      */
     protected $changesData;
 
+    protected $createCpt = 0;
+    protected $updateCpt = 0;
+    protected $deleteCpt = 0;
+
     /**
      * Create a new command instance.
      *
@@ -73,13 +77,13 @@ class SyncsFromCouchbase extends Command
         // Handle changes
         $this->handleChanges();
 
-        // $syncedModules = $this->getModulesSyncedWithCouchbase();
+        // Display information
+        $this->info('Created: <comment>' . $this->createCpt . '</comment>');
+        $this->info('Updated: <comment>' . $this->updateCpt . '</comment>');
+        $this->info('Deleted: <comment>' . $this->deleteCpt . '</comment>');
 
-        // foreach ($syncedModules as $module) {
-        //     $this->syncModuleData($module);
-        // }
-
-        // $this->setLastSyncSequence();
+        // Save new last sync sequence
+        $this->setLastSyncSequence();
     }
 
     protected function getLastChanges()
@@ -211,6 +215,8 @@ class SyncsFromCouchbase extends Command
 
         $record->forceCouchbaseUpdate = false;
 
+        // Increments counter
+        $this->createCpt++;
 
         return $record;
     }
@@ -241,6 +247,9 @@ class SyncsFromCouchbase extends Command
             $record->setCouchbaseRev($document->_rev);
         }
 
+        // Increments counter
+        $this->updateCpt++;
+
         return $record;
     }
 
@@ -269,6 +278,9 @@ class SyncsFromCouchbase extends Command
         }
 
         $record->stopCouchbaseDeleteEvent = false;
+
+        // Increments counter
+        $this->deleteCpt++;
     }
 
     protected function getLastSyncSequence()

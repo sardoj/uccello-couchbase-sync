@@ -14,7 +14,8 @@ class CreateCouchbaseParamsTable extends Migration
     public function up()
     {
         Schema::create('couchbase_params', function (Blueprint $table) {
-            $table->string('key')->primary();
+            $table->increments('id');
+            $table->string('key')->unique();
             $table->string('value')->nullable();
             $table->timestamps();
         });
