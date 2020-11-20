@@ -4,7 +4,11 @@ namespace Uccello\UccelloCouchbaseSync\Console\Commands;
 
 use Carbon\Carbon;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Schema;
+use Uccello\Core\Models\Entity;
 use Uccello\Core\Models\Module;
+use Uccello\UccelloCouchbaseSync\Models\CouchbaseParam;
+use Uccello\UccelloCouchbaseSync\Support\Classes\CouchbaseSync;
 
 class SyncsFromCouchbase extends Command
 {
@@ -23,6 +27,25 @@ class SyncsFromCouchbase extends Command
     protected $description = 'Syncs data from a Couchbase database.';
 
     /**
+     * @var CouchbaseInterface|null
+     */
+    protected $couchbaseClient;
+
+    /**
+     * List of names of modules synced with Couchbase
+     *
+     * @var Collection
+     */
+    protected $syncedModules;
+
+    /**
+     * List of changes
+     *
+     * @var StdObject|null
+     */
+    protected $changesData;
+
+    /**
      * Create a new command instance.
      *
      * @return void
@@ -30,6 +53,8 @@ class SyncsFromCouchbase extends Command
     public function __construct()
     {
         parent::__construct();
+
+        $this->getModulesSyncedWithCouchbase();
     }
 
     /**
@@ -39,102 +64,231 @@ class SyncsFromCouchbase extends Command
      */
     public function handle()
     {
-        $syncedModules = $this->getModulesSyncedWithCouchbase();
+        // Create a Curl client able to connect with Couchbase Server
+        $this->couchbaseClient = new CouchbaseSync(config('couchbase.database_url'), config('couchbase.secret'));
 
-        foreach ($syncedModules as $module) {
-            $this->syncModuleData($module);
+        // Get list of last changes
+        $this->getLastChanges();
+
+        // Handle changes
+        $this->handleChanges();
+
+        // $syncedModules = $this->getModulesSyncedWithCouchbase();
+
+        // foreach ($syncedModules as $module) {
+        //     $this->syncModuleData($module);
+        // }
+
+        // $this->setLastSyncSequence();
+    }
+
+    protected function getLastChanges()
+    {
+        // Get last sequence
+        $lastSyncSeq = $this->getLastSyncSequence();
+
+        // Request list of last changes
+        $response = $this->couchbaseClient->get("_changes", ['include_docs' => "true", 'since' => $lastSyncSeq]);
+        $this->changesData = json_decode($response);
+
+        return $this->changesData;
+    }
+
+    protected function handleChanges()
+    {
+        if (!$this->changesData || !$this->changesData->results) {
+            return;
+        }
+
+        foreach ($this->changesData->results as $change) {
+            // IF ucid is not defined => create
+            // else if deleted == true => delete
+            // else update
+
+            if (empty($change->deleted) && isset($change->doc) && empty($change->doc->ucid)) {
+                // Create
+                $this->createRecord($change);
+            } else {
+                $record = $this->getRecordFromChange($change);
+
+                if ($record) {
+                    if (isset($change->deleted) && $change->deleted === true) {
+                        // Delete
+                        $this->deleteRecord($record, $change);
+                    } else {
+                        // Update
+                        $this->updateRecord($record, $change);
+                    }
+                }
+            }
         }
     }
 
     protected function getModulesSyncedWithCouchbase()
     {
-        $syncedModules = collect();
+        $this->syncedModules = collect();
 
         $modules = Module::whereNotNull('model_class')->get();
         foreach ($modules as $module) {
             $modelClass = $module->model_class;
 
             if (class_exists($modelClass) && in_array('Uccello\UccelloCouchbaseSync\Support\Traits\SyncsWithCouchbase', class_uses($modelClass))) {
-                $syncedModules[] = $module;
+                $this->syncedModules[] = $module->name;
             }
         }
 
-        return $syncedModules;
+        return $this->syncedModules;
     }
 
-    protected function syncModuleData(Module $module)
+    protected function getRecordFromChange($change)
     {
-        // Get last sync datetime
-        $lastSyncDate = $this->getLastSyncDatetime($module);
+        $record = null;
 
-        // Memorize new datetime before to get records (important for not forgetting new modifications the next time)
-        $newSyncDate = Carbon::now();
+        // If ucuuid is set, search by couchbase_id or uuid
+        if (isset($change->doc) && isset($change->doc->ucuuid)) {
+            $entity = Entity::where('couchbase_id', $change->id)
+                ->orWhere('id', $change->doc->ucuuid)
+                ->first();
+        } else {
+            $entity = Entity::where('couchbase_id', $change->id)->first();
+        }
 
-        // Syncs created records
-        $createdRecords = $this->getCreatedRecords($module, $lastSyncDate);
-        $this->createRecords($module, $createdRecords);
-        unset($createdRecords); // Improves memory
+        if ($entity) {
+            $module = ucmodule($entity->module_id);
 
-        // Syncs updated records
-        $updatedRecords = $this->getUpdatedRecords($module, $lastSyncDate);
-        $this->updateRecords($module, $updatedRecords);
-        unset($updatedRecords); // Improves memory
+            if ($module) {
+                $modelClass = $module->model_class;
+                $record = $modelClass::find($entity->record_id);
+            }
+        }
 
-        // Syncs deleted records
-        $deletedRecords = $this->getDeletedRecords($module, $lastSyncDate);
-        $this->deleteRecords($module, $deletedRecords);
-        unset($deletedRecords); // Improves memory
-
-        // Update last sync datetime
-        $this->setLastSyncDatetime($module, $newSyncDate);
+        return $record;
     }
 
-    protected function getLastSyncDatetime(Module $module)
+    protected function createRecord($change)
     {
-        return $module->data->couchbase_last_sync ?? null;
+        // Checks if a document is defined
+        if (!isset($change->doc) || !isset($change->doc->ucmodule)) {
+            return;
+        }
+
+        // Gets document
+        $document = $change->doc;
+
+        // Checks if the module is synced with Couchbase
+        if (!$this->syncedModules->contains($document->ucmodule)) {
+            return;
+        }
+
+        // Gets module
+        $module = ucmodule($document->ucmodule);
+        if (!$module) {
+            return;
+        }
+
+        // Creates new record from document data
+        $modelClass = $module->model_class;
+        $record = new $modelClass;
+
+        foreach ($document as $key => $val) {
+            if (Schema::hasColumn($record->getTable(), $key)) {
+                $record->{$key} = $val;
+            }
+        }
+
+        // It is important to force update instead of create
+        // else Uccello will understand he must create a new record in Couchbase
+        if ($document->_id && $document->_rev) {
+            $record->forceCouchbaseUpdate = true;
+
+            // Normally, couchbase_id and couchbase_rev are getted from uccello_entities
+            // but those data don't exist before saving(). So we force them.
+            $record->couchbaseId = $document->_id;
+            $record->couchbaseRev = $document->_rev;
+        }
+
+        $record->save();
+
+        $record->forceCouchbaseUpdate = false;
+
+
+        return $record;
     }
 
-    protected function getCreatedRecords(Module $module, $lastSyncDate)
+    protected function updateRecord($record, $change)
     {
-        //TODO: Get all record from Couchbase with "created_at" > $lastSyncDate
-        // Check created_at column name in config file
-        return null;
+        if (!isset($change->doc) || !isset($change->doc->ucmodule)) {
+            return;
+        }
+
+        // Gets document
+        $document = $change->doc;
+
+        // Checks if the module is synced with Couchbase
+        if (!$this->syncedModules->contains($document->ucmodule)) {
+            return;
+        }
+
+        foreach ($document as $key => $val) {
+            if (Schema::hasColumn($record->getTable(), $key)) {
+                $record->{$key} = $val;
+            }
+        }
+        $record->save();
+
+        // Update couchbase _rev
+        if ($document->_rev) {
+            $record->setCouchbaseRev($document->_rev);
+        }
+
+        return $record;
     }
 
-    protected function getUpdatedRecords(Module $module, $lastSyncDate)
+    protected function deleteRecord($record, $change)
     {
-        //TODO: Get all record from Couchbase with "updated_at" > $lastSyncDate
-        // Check updated_at column name in config file
-        return null;
+        if (!isset($change->doc)) {
+            return;
+        }
+
+        // Gets document
+        $document = $change->doc;
+
+        // It's important to stop delete event else Uccello will try
+        // to delete record from couchbase
+        $record->stopCouchbaseDeleteEvent = true;
+
+        if (config('couchbase.force_delete')) {
+            if (method_exists($record, 'trashed')) {
+                $record->forceDelete();
+            } else {
+                $record->delete();
+            }
+        } else {
+            $record->setCouchbaseRev($document->_rev);
+            $record->delete();
+        }
+
+        $record->stopCouchbaseDeleteEvent = false;
     }
 
-    protected function getDeletedRecords(Module $module, $lastSyncDate)
+    protected function getLastSyncSequence()
     {
-        //TODO: Get all record from Couchbase with "deleted_at" > $lastSyncDate
-        // Check deleted_at column name in config file
-        return null;
+        $param = CouchbaseParam::where('key', 'last_sync_seq')->first();
+
+        return $param->value ?? null;
     }
 
-    protected function createRecords(Module $module, $records)
+    protected function setLastSyncSequence()
     {
-        //TODO: Create records
-    }
+        $lastSyncSeq = $this->changesData->last_seq ?? null;
 
-    protected function updateRecords(Module $module, $records)
-    {
-        //TODO: Update records
-    }
+        $param = CouchbaseParam::where('key', 'last_sync_seq')->first();
 
-    protected function deleteRecords(Module $module, $records)
-    {
-        //TODO: Delete records
-    }
-
-    protected function setLastSyncDatetime(Module $module, $newSyncDate)
-    {
-        $data = (array) $module->data || [];
-        $data['couchbase_last_sync'] = $newSyncDate->format('Y-m-d H:i:s');
-        $module->data = $data;
-        $module->save();
+        if (!$param) {
+            $param = new CouchbaseParam;
+            $param->key = 'last_sync_seq';
+        }
+        $param->value = $lastSyncSeq;
+        $param->save();
     }
 }

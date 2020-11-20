@@ -26,7 +26,7 @@ class AppServiceProvider extends ServiceProvider
         // $this->loadTranslationsFrom(__DIR__ . '/../../resources/lang', 'uccello-couchbase-sync');
 
         // Migrations
-        // $this->loadMigrationsFrom(__DIR__ . '/../../database/migrations');
+        $this->loadMigrationsFrom(__DIR__ . '/../../database/migrations');
 
         // Routes
         $this->loadRoutesFrom(__DIR__ . '/../Http/routes.php');

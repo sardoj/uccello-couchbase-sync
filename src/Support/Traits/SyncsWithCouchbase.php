@@ -12,13 +12,23 @@ trait SyncsWithCouchbase
      */
     protected $couchbaseClient;
 
+    public $forceCouchbaseUpdate = false;
+    public $stopCouchbaseDeleteEvent = false;
+
+    public $couchbaseId;
+    public $couchbaseRev;
+
     /**
      * Boot the trait and add the model events to synchronize with firebase
      */
     public static function bootSyncsWithCouchbase()
     {
         static::created(function ($model) {
-            $model->saveToCouchbase('set');
+            if ($model->forceCouchbaseUpdate) { // See SyncsFromCouchbase.php -> createRecord()
+                $model->saveToCouchbase('update');
+            } else {
+                $model->saveToCouchbase('set');
+            }
         });
 
         static::updated(function ($model) {
@@ -28,6 +38,10 @@ trait SyncsWithCouchbase
         // If it is a true delete, it is important to use "deleting" instead of "deleted"
         // else we don't know record data
         static::deleting(function ($model) {
+            if ($model->stopCouchbaseDeleteEvent === true) { // See SyncsFromCouchbase.php -> deleteRecord()
+                return;
+            }
+
             if (method_exists($model, 'isForceDeleting') && !$model->isForceDeleting()) {
                 $model->saveToCouchbase('soft-delete');
             } else {
@@ -40,6 +54,24 @@ trait SyncsWithCouchbase
                 $model->saveToCouchbase('set');
             });
         }
+    }
+
+    /**
+     * Save the model to the database.
+     *
+     * @param  array  $options
+     * @return bool
+     */
+    public function save(array $options = [])
+    {
+        // if ($this->_couchbase_id) {
+        //     $this->couchbase_id = $this->_couchbase_id;
+        //     $this->couchbase_rev = $this->_couchbase_rev;
+        //     unset($this->_couchbase_id);
+        //     unset($this->_couchbase_rev);
+        // }
+
+        parent::save($options);
     }
 
     /**
@@ -59,7 +91,7 @@ trait SyncsWithCouchbase
                 ->first();
 
             if ($entity) {
-                $_id = $entity->data->couchbase->_id ?? '';
+                $_id = $entity->couchbase_id;
             }
         }
 
@@ -83,11 +115,75 @@ trait SyncsWithCouchbase
                 ->first();
 
             if ($entity) {
-                $_id = $entity->data->couchbase->_rev ?? '';
+                $_id = $entity->couchbase_rev;
             }
         }
 
         return $_id;
+    }
+
+    /**
+     * Sets couchbase _id.
+     *
+     * @return string|null
+     */
+    public function setCouchbaseId($_id)
+    {
+        $module = $this->module;
+
+        if ($module) {
+            $entity = Entity::where('module_id', $module->getKey())
+                ->where('record_id', $this->getKey())
+                ->first();
+
+            if ($entity) {
+                $entity->couchbase_id = $_id;
+                $entity->save();
+            }
+        }
+    }
+
+    /**
+     * Sets couchbase _rev.
+     *
+     * @return string|null
+     */
+    public function setCouchbaseRev($_rev)
+    {
+        $module = $this->module;
+
+        if ($module) {
+            $entity = Entity::where('module_id', $module->getKey())
+                ->where('record_id', $this->getKey())
+                ->first();
+
+            if ($entity) {
+                $entity->couchbase_rev = $_rev;
+                $entity->save();
+            }
+        }
+    }
+
+    /**
+     * Sets couchbase _id and _rev.
+     *
+     * @return string|null
+     */
+    public function setCouchbaseIdAndRev($_id, $_rev)
+    {
+        $module = $this->module;
+
+        if ($module) {
+            $entity = Entity::where('module_id', $module->getKey())
+                ->where('record_id', $this->getKey())
+                ->first();
+
+            if ($entity) {
+                $entity->couchbase_id = $_id;
+                $entity->couchbase_rev = $_rev;
+                $entity->save();
+            }
+        }
     }
 
     /**
@@ -97,20 +193,24 @@ trait SyncsWithCouchbase
     {
         if ($fresh = $this->fresh()) {
             // Add module name
-            unset($fresh->{$this->getKeyName()}); // Remove id (could create conflicts with Couchbase Lite)
             $fresh->ucid = $this->getKey(); // Add id name ucid
+            $fresh->ucuuid = $this->uuid; // Add uuid
             $fresh->ucmodule = $this->module->name ?? '';
 
             // Add Couchbase _id and _rev if exists
-            $_id = $this->couchbaseId;
-            $_rev = $this->couchbaseRev;
+            $_id = $this->couchbaseId ?? $this->couchbase_id;
+            $_rev = $this->couchbaseRev ?? $this->couchbase_rev;
 
             if ($_id && $_rev) {
                 $fresh->_id = $_id;
                 $fresh->_rev = $_rev;
             }
 
-            return $fresh->toArray();
+            $freshArray = $fresh->toArray();
+            unset($freshArray[$this->getKeyName()]); // Remove id (could create conflicts with Couchbase Lite)
+            unset($freshArray['uuid']);
+
+            return $freshArray;
         }
         return [];
     }
@@ -158,12 +258,8 @@ trait SyncsWithCouchbase
                 ->first();
 
             if ($entity) {
-                $data = (array) $entity->data ?? [];
-                $data['couchbase'] = [
-                    '_id' => $_id,
-                    '_rev' => $_rev
-                ];
-                $entity->data = $data;
+                $entity->couchbase_id = $_id;
+                $entity->couchbase_rev = $_rev;
                 $entity->save();
             }
         }
